@@ -1,6 +1,12 @@
 import pytest
+import asyncio
 from fastapi.testclient import TestClient
 from main import app
+from tachyon.core.database import init_db
+
+@pytest.fixture(scope="module", autouse=True)
+def setup_test_db():
+    asyncio.run(init_db())
 
 client = TestClient(app)
 
@@ -15,7 +21,6 @@ def test_api_status():
     assert response.json()["module"] == "tachyon.api"
 
 def test_upload_placeholder():
-    # Since we don't have real providers configured, we just test the endpoint existence
     files = {'file': ('test.txt', b'hello world')}
     response = client.post("/api/v1/upload", files=files)
     assert response.status_code == 200
