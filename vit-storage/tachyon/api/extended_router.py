@@ -47,34 +47,58 @@ _orchestrator = TachyonOrchestrator()
     description="Returns health and usage statistics for all registered cloud provider nodes.",
 )
 async def list_nodes():
-    try:
-        health = await _orchestrator.pool.health_check()
-    except Exception as e:
-        logger.warning(f"Pool health check failed: {e}")
-        health = {}
+    """
+    Iterate each registered provider independently so that one failing provider
+    (e.g. bad Dropbox credentials) does not hide all the others.
+    """
+    import time as _time
 
+    providers = _orchestrator.pool.providers   # Dict[str, CloudProvider]
     nodes: List[NodeInfo] = []
-    for provider_id, info in health.items():
+
+    for provider_id, provider in providers.items():
+        try:
+            t0 = _time.monotonic()
+            healthy = await provider.health_check()
+            ping_ms = round((_time.monotonic() - t0) * 1000)
+        except Exception as e:
+            logger.warning(f"Health check failed for provider {provider_id}: {e}")
+            healthy = False
+            ping_ms = None
+
+        try:
+            usage     = await provider.get_usage()
+            quota     = usage.get("quota_bytes", 0)
+            used      = usage.get("used_bytes", 0)
+            usage_pct = round((used / quota * 100) if quota > 0 else 0.0, 2)
+        except Exception as e:
+            logger.warning(f"Usage check failed for provider {provider_id}: {e}")
+            usage_pct = 0.0
+
+        quarantined = _orchestrator.pool.is_degraded(provider_id)
+
         nodes.append(NodeInfo(
             id=provider_id,
             name=provider_id.replace("_", " ").title(),
             type="Multi-Cloud Object Node",
-            healthy=info.get("healthy", False),
-            quarantined=info.get("quarantined", False),
-            usage_pct=round(info.get("usage_pct", 0.0) * 100, 2),
-            ping_ms=info.get("ping_ms"),
+            healthy=healthy,
+            quarantined=quarantined,
+            usage_pct=usage_pct,
+            ping_ms=ping_ms,
         ))
 
     if not nodes:
+        # Truly no providers registered at all — show local_disk as a safe fallback
         nodes.append(NodeInfo(
             id="local_disk",
             name="Local Disk",
             type="Multi-Cloud Object Node",
             healthy=True,
             quarantined=False,
-            usage_pct=0.83,
-            ping_ms=23,
+            usage_pct=0.0,
+            ping_ms=None,
         ))
+
     return nodes
 
 
