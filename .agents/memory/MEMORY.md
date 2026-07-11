@@ -1,0 +1,1 @@
+- [vit-storage fixes](vit-storage-fixes.md) — SPA routing, 9 new API endpoints, SharedLink DB model, complete frontend rebuild pushed to vitnetwork/vit-storage@main.
