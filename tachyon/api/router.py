@@ -70,7 +70,7 @@ async def upload_file(
 
         shards_count = len(manifest.provider_mapping.get("shards", []))
         return UploadResponse(
-            file_id=file_id,
+            file_id=manifest.file_id,
             status="uploaded",
             fragments_count=shards_count if shards_count else 9
         )
@@ -85,8 +85,19 @@ async def upload_file(
             description="Reassembles erasure-coded fragments in parallel and streams the reconstructed file back to the client.")
 async def download_file(file_id: str, db: AsyncSession = Depends(get_db)):
     try:
+        # Fetch filename for content-disposition
+        manifest_result = await db.execute(
+            select(TachyonManifest).where(TachyonManifest.file_id == file_id)
+        )
+        manifest = manifest_result.scalar_one_or_none()
+        filename = manifest.filename if manifest else "download"
+
         data = await orchestrator.retrieve(db, file_id)
-        return Response(content=data, media_type="application/octet-stream")
+        return Response(
+            content=data,
+            media_type="application/octet-stream",
+            headers={"Content-Disposition": f'attachment; filename="{filename}"'}
+        )
     except AppError as ae:
         raise HTTPException(status_code=ae.status_code, detail=ae.message)
     except Exception as e:
@@ -123,10 +134,12 @@ async def list_files(
 
             response_data.append(
                 FileMetadata(
+                    file_id=m.file_id,
                     filename=m.filename,
                     total_size=m.size_bytes,
                     fragments=frags,
-                    redundancy_ratio=1.5
+                    redundancy_ratio=1.5,
+                    created_at=m.created_at.isoformat() if m.created_at else None,
                 )
             )
         return response_data
@@ -155,9 +168,11 @@ async def get_file_metadata(file_id: str, db: AsyncSession = Depends(get_db)):
         for f in manifest.provider_mapping.get("shards", [])
     ]
     return FileMetadata(
+        file_id=manifest.file_id,
         filename=manifest.filename,
         total_size=manifest.size_bytes,
-        fragments=frags
+        fragments=frags,
+        created_at=manifest.created_at.isoformat() if manifest.created_at else None,
     )
 
 @router.delete("/files/{file_id}",
@@ -169,6 +184,8 @@ async def delete_file(file_id: str, db: AsyncSession = Depends(get_db)):
         if not success:
             raise HTTPException(status_code=404, detail="File manifest not found")
         return {"status": "deleted", "file_id": file_id}
+    except HTTPException:
+        raise
     except Exception as e:
         logger.exception("File deletion failed")
         raise HTTPException(status_code=500, detail=f"Delete action failed: {e}")

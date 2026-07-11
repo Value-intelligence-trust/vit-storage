@@ -45,6 +45,7 @@ async def lifespan(app: FastAPI):
 
     # 2. Database Connectivity Diagnostics
     db_healthy = False
+    r = None
     try:
         async with AsyncSessionLocal() as session:
             res = await session.execute(text("SELECT 1"))
@@ -65,7 +66,7 @@ async def lifespan(app: FastAPI):
         else:
             logger.info("Redis not configured. Operating with in-memory cache fallback.")
     except Exception as e:
-        logger.warning(f"Redis connectivity check: FAILED (%s). Memory fallback active. Error: {e}")
+        logger.warning(f"Redis connectivity check: FAILED. Memory fallback active. Error: {e}")
 
     # 4. Background Shards Integrity Worker
     worker = TachyonVerificationWorker(interval_seconds=3600)
@@ -107,7 +108,6 @@ app = FastAPI(
 @app.middleware("http")
 async def add_request_id(request: Request, call_next):
     request_id = request.headers.get("X-Request-ID", str(uuid.uuid4()))
-    # Ingest request_id into state
     request.state.request_id = request_id
     response = await call_next(request)
     response.headers["X-Request-ID"] = request_id
@@ -120,7 +120,7 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# Exception handlers mapping
+# Exception handlers
 from app.core.errors import AppError, error_response
 
 @app.exception_handler(AppError)
@@ -133,37 +133,63 @@ async def app_error_handler(request: Request, exc: AppError):
         details=exc.details
     )
 
-# Include Router
+# ── Routers ──────────────────────────────────────────────────────────────────
 from tachyon.api.router import router as api_router
-app.include_router(api_router, prefix="/api/v1")
+from tachyon.api.extended_router import extended_router
 
-# Mount static files directory if it exists or create on the fly
+app.include_router(api_router, prefix="/api/v1", tags=["Storage Core"])
+app.include_router(extended_router, prefix="/api/v1", tags=["Extended API"])
+
+# ── Static files ──────────────────────────────────────────────────────────────
 os.makedirs("frontend/static", exist_ok=True)
 app.mount("/static", StaticFiles(directory="frontend/static"), name="static")
 
-@app.get("/")
-async def root():
-    return RedirectResponse(url="/dashboard")
-
-@app.get("/dashboard", response_class=HTMLResponse, summary="VIT Storage Dashboard")
-async def dashboard():
+# ── Helper: serve the SPA index.html ─────────────────────────────────────────
+def _serve_spa() -> HTMLResponse:
     index_path = os.path.join("frontend", "static", "index.html")
     if os.path.exists(index_path):
-        return FileResponse(index_path)
-    return HTMLResponse("""
-        <!DOCTYPE html>
-        <html>
-        <head>
-            <title>VIT Storage Portal</title>
-            <script src="https://cdn.tailwindcss.com"></script>
-        </head>
-        <body class="bg-gray-900 text-white flex flex-col items-center justify-center min-h-screen">
-            <h1 class="text-3xl font-bold mb-4">VIT Storage UI Initializing</h1>
-            <p class="text-gray-400">The modern UI is being built. Please stand by...</p>
-        </body>
-        </html>
-    """)
+        with open(index_path, "r", encoding="utf-8") as f:
+            content = f.read()
+        return HTMLResponse(content=content)
+    return HTMLResponse("<h1>VIT Storage — UI not found</h1>", status_code=503)
 
+# ── SPA routes (all tab paths must serve index.html) ─────────────────────────
+SPA_ROUTES = ["/", "/dashboard", "/my-files", "/shared-links",
+              "/api-playground", "/administration", "/wallet", "/documentation"]
+
+@app.get("/", include_in_schema=False)
+async def root():
+    return _serve_spa()
+
+@app.get("/dashboard", response_class=HTMLResponse, summary="VIT Storage Dashboard", include_in_schema=False)
+async def dashboard():
+    return _serve_spa()
+
+@app.get("/my-files", response_class=HTMLResponse, include_in_schema=False)
+async def my_files():
+    return _serve_spa()
+
+@app.get("/shared-links", response_class=HTMLResponse, include_in_schema=False)
+async def shared_links_page():
+    return _serve_spa()
+
+@app.get("/api-playground", response_class=HTMLResponse, include_in_schema=False)
+async def api_playground_page():
+    return _serve_spa()
+
+@app.get("/administration", response_class=HTMLResponse, include_in_schema=False)
+async def administration_page():
+    return _serve_spa()
+
+@app.get("/wallet", response_class=HTMLResponse, include_in_schema=False)
+async def wallet_page():
+    return _serve_spa()
+
+@app.get("/documentation", response_class=HTMLResponse, include_in_schema=False)
+async def documentation_page():
+    return _serve_spa()
+
+# ── Core endpoints ────────────────────────────────────────────────────────────
 @app.get("/ping", summary="Service Liveness Ping")
 async def ping():
     return {"ping": "pong", "status": "ok", "timestamp": datetime.utcnow().isoformat()}
@@ -173,7 +199,6 @@ async def health():
     db_ok = getattr(app.state, "db_healthy", False)
     redis_ok = getattr(app.state, "redis_healthy", False)
 
-    # Fetch database connection health dynamically
     try:
         async with AsyncSessionLocal() as session:
             await session.execute(text("SELECT 1"))
@@ -181,7 +206,6 @@ async def health():
     except Exception:
         db_ok = False
 
-    # Fetch provider health dynamically from registry
     try:
         from tachyon.providers.registry import ProviderRegistry
         registry = ProviderRegistry()
@@ -202,7 +226,6 @@ async def health():
 
 @app.get("/metrics", summary="Prometheus Metrics Endpoint")
 async def metrics():
-    # Retrieve dynamic status indicators
     db_ok = 1 if getattr(app.state, "db_healthy", False) else 0
     try:
         async with AsyncSessionLocal() as session:
