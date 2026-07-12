@@ -38,6 +38,8 @@ class TachyonManifest(Base):
     provider_mapping = Column(JSON, nullable=False)
     owner_user_id = Column(Integer, nullable=True)
     created_at = Column(DateTime, default=datetime.utcnow)
+    content_type = Column(String(128), nullable=True)
+    tags = Column(JSON, nullable=True)
 
 class SharedLink(Base):
     """Shared file link records for the Shared Links tab."""
