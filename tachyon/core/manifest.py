@@ -16,14 +16,12 @@ class ManifestManager:
                       original_size: int,
                       sha256: str,
                       shard_locations: List[dict],
-                      owner_user_id: int = None) -> TachyonManifest:
+                      owner_user_id: int = None,
+                      content_type: str = None) -> TachyonManifest:
         """
         Create and persist a TachyonManifest.
         shard_locations: [{shard_index, provider_id, file_id, shard_hash, size_bytes}]
         """
-        # Removed begin_nested() to avoid savepoint issues
-        # In Session 4.2 spec, we need health_score, status, etc.
-        # We store them in provider_mapping to respect model constraints.
         provider_mapping = {
             "shards": shard_locations,
             "_metadata": {
@@ -34,7 +32,6 @@ class ManifestManager:
             }
         }
 
-        # For compatibility with existing TachyonManifest (v5.5.0 router.py)
         fragment_names = [s["file_id"] for s in shard_locations]
 
         manifest = TachyonManifest(
@@ -44,6 +41,7 @@ class ManifestManager:
             fragment_names=fragment_names,
             provider_mapping=provider_mapping,
             owner_user_id=owner_user_id,
+            content_type=content_type,
             created_at=datetime.now(timezone.utc).replace(tzinfo=None)
         )
         db.add(manifest)
@@ -70,7 +68,6 @@ class ManifestManager:
         """
         Returns manifests where health_score < 0.8 and status is active.
         """
-        # Using JSON extraction for filtering
         stmt = select(TachyonManifest).where(
             TachyonManifest.provider_mapping["_metadata"]["status"].as_string() == "active",
             TachyonManifest.provider_mapping["_metadata"]["health_score"].as_float() < 0.8
