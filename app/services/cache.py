@@ -47,8 +47,8 @@ def _get_redis():
         _redis_client = aioredis.from_url(
             redis_url,
             decode_responses=True,
-            socket_timeout=0.5,
-            socket_connect_timeout=1.0,
+            socket_timeout=3.0,
+            socket_connect_timeout=3.0,
         )
         logger.info("Cache: Redis backend enabled")
     except Exception as exc:
