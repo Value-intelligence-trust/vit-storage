@@ -95,6 +95,10 @@ async def init_db() -> None:
     """
     from tachyon.core.models import Base
     try:
+        import vit_connect.models  # noqa: F401
+    except ImportError:
+        pass
+    try:
         logger.info("Verifying database schema...")
         async with async_engine.begin() as conn:
             await conn.run_sync(Base.metadata.create_all)

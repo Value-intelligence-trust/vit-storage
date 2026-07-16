@@ -186,6 +186,10 @@ from tachyon.api.extended_router import extended_router
 app.include_router(api_router,      prefix="/api/v1", tags=["Storage Core"])
 app.include_router(extended_router, prefix="/api/v1", tags=["Extended API"])
 
+# VIT Connect
+from vit_connect.router import router as connect_router
+app.include_router(connect_router, prefix="/api/v1/connect", tags=["VIT Connect"])
+
 # ── Static files ──────────────────────────────────────────────────────────────
 os.makedirs("frontend/static", exist_ok=True)
 app.mount("/static", StaticFiles(directory="frontend/static"), name="static")
@@ -224,6 +228,9 @@ async def wallet_page():     return _serve_spa()
 
 @app.get("/documentation",  response_class=HTMLResponse, include_in_schema=False)
 async def documentation_page(): return _serve_spa()
+
+@app.get("/connect",        response_class=HTMLResponse, include_in_schema=False)
+async def connect_page():    return _serve_spa()
 
 
 # ── Core endpoints ────────────────────────────────────────────────────────────

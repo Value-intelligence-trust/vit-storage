@@ -148,7 +148,44 @@
         .empty-icon { font-size: 40px; margin-bottom: 12px; }
         .empty-title { font-size: 15px; font-weight: 600; color: var(--text2); margin-bottom: 6px; }
         [x-cloak] { display: none !important; }
-    </style>
+    
+        /* ── VIT Connect ─────────────────────────────── */
+        .connect-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(280px, 1fr)); gap: 16px; margin-bottom: 28px; }
+        .provider-card { background: var(--bg2); border: 1px solid var(--border); border-radius: 14px; padding: 20px; display: flex; flex-direction: column; gap: 14px; transition: border-color 0.2s; }
+        .provider-card:hover { border-color: var(--border2); }
+        .provider-card.connected { border-color: rgba(34,211,160,0.35); }
+        .provider-card.expired   { border-color: rgba(251,191,36,0.35); }
+        .provider-card.error     { border-color: rgba(248,113,113,0.35); }
+        .provider-header { display: flex; align-items: center; gap: 12px; }
+        .provider-icon { width: 44px; height: 44px; border-radius: 12px; display: flex; align-items: center; justify-content: center; font-size: 22px; flex-shrink: 0; }
+        .provider-icon-gdrive    { background: rgba(79,124,255,0.15); }
+        .provider-icon-dropbox   { background: rgba(167,139,250,0.15); }
+        .provider-icon-onedrive  { background: rgba(79,124,255,0.15); }
+        .provider-icon-r2        { background: rgba(251,146,60,0.15); }
+        .provider-icon-backblaze { background: rgba(248,113,113,0.15); }
+        .provider-icon-s3        { background: rgba(251,191,36,0.15); }
+        .provider-icon-local     { background: rgba(34,211,160,0.15); }
+        .provider-meta { flex: 1; min-width: 0; }
+        .provider-name { font-size: 14px; font-weight: 600; }
+        .provider-desc { font-size: 11.5px; color: var(--text3); margin-top: 2px; line-height: 1.4; }
+        .provider-status-row { display: flex; align-items: center; gap: 8px; font-size: 12px; }
+        .provider-email { font-size: 11.5px; color: var(--text2); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+        .provider-stats { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
+        .provider-stat { background: var(--bg3); border-radius: 8px; padding: 8px 10px; }
+        .provider-stat-label { font-size: 10px; color: var(--text3); text-transform: uppercase; letter-spacing: 0.5px; margin-bottom: 3px; }
+        .provider-stat-value { font-size: 13px; font-weight: 600; }
+        .provider-actions { display: flex; gap: 8px; flex-wrap: wrap; }
+        .connect-status-bar { display: flex; align-items: center; gap: 10px; padding: 12px 16px; border-radius: 10px; margin-bottom: 20px; font-size: 13px; }
+        .connect-status-bar.success { background: rgba(34,211,160,0.1); border: 1px solid rgba(34,211,160,0.25); color: var(--green); }
+        .connect-status-bar.error   { background: rgba(248,113,113,0.1); border: 1px solid rgba(248,113,113,0.25); color: var(--red); }
+        /* S3 Wizard Modal */
+        .modal-overlay { position: fixed; inset: 0; background: rgba(0,0,0,0.55); z-index: 200; display: flex; align-items: center; justify-content: center; backdrop-filter: blur(2px); }
+        .modal-box { background: var(--bg2); border: 1px solid var(--border2); border-radius: 16px; padding: 28px; width: 100%; max-width: 440px; max-height: 90vh; overflow-y: auto; }
+        .modal-title { font-size: 16px; font-weight: 700; margin-bottom: 4px; }
+        .modal-sub   { font-size: 12.5px; color: var(--text3); margin-bottom: 20px; }
+        .modal-actions { display: flex; gap: 10px; justify-content: flex-end; margin-top: 20px; }
+        .advanced-toggle { font-size: 12px; color: var(--accent); cursor: pointer; margin-top: 6px; display: inline-block; }
+</style>
 </head>
 <body>
 
@@ -188,6 +225,11 @@
             </div>
             <div class="nav-item" :class="{active: tab==='docs'}" @click="tab='docs'">
                 <span class="nav-icon">📚</span> Documentation
+            </div>
+            <div class="nav-section">Integrations</div>
+            <div class="nav-item" :class="{active: tab==='connect'}" @click="tab='connect'; loadConnect()">
+                <span class="nav-icon">🔌</span> Storage Providers
+                <span x-show="connections.filter(c=>c.status==='connected').length > 0" class="badge badge-blue" style="margin-left:auto;" x-text="connections.filter(c=>c.status==='connected').length"></span>
             </div>
         </div>
         <div class="sidebar-footer">
@@ -768,6 +810,18 @@ function storageApp() {
 
         wallet: {},
 
+        // ── VIT Connect state ───────────────────────
+        connections: [],
+        providerCatalogue: [],
+        connectMsg: {},
+        connectLoading: null,
+        connectRefreshing: null,
+        showS3Wizard: false,
+        s3Wizard: { provider_subtype: 's3', providerLabel: 'S3', bucket_name: '', access_key: '', secret_key: '', region: 'us-east-1', account_id: '', endpoint_url: '', label: '', showAdvanced: false },
+        s3TestResult: null,
+        s3WizardLoading: false,
+        s3WizardMode: '',
+
         pgMethod: 'GET',
         pgPath: '/api/v1/status',
         pgBody: '',
@@ -805,7 +859,8 @@ function storageApp() {
         get tabLabel() {
             return { dashboard: 'Dashboard', files: 'My Files', shared: 'Shared Links',
                      playground: 'API Playground', admin: 'Administration',
-                     wallet: 'Wallet', docs: 'Documentation' }[this.tab] || 'VIT Storage';
+                     wallet: 'Wallet', docs: 'Documentation',
+                     connect: 'Storage Providers' }[this.tab] || 'VIT Storage';
         },
 
         async init() {
@@ -1115,6 +1170,176 @@ function storageApp() {
         },
         dismissToast(id) { this.toasts = this.toasts.filter(t => t.id !== id); },
 
+        // ─── VIT Connect methods ──────────────────────────────────────────
+        async loadConnect() {
+            // Check URL params for OAuth callback result
+            const params = new URLSearchParams(window.location.search);
+            const success = params.get('success');
+            const error   = params.get('error');
+            const label   = params.get('label');
+            if (success) {
+                this.connectMsg = { type: 'success', text: '✓ ' + (label || success) + ' connected successfully!' };
+                history.replaceState({}, '', window.location.pathname);
+            } else if (error) {
+                this.connectMsg = { type: 'error', text: 'Connection failed: ' + error.replace(/_/g,' ') };
+                history.replaceState({}, '', window.location.pathname);
+            }
+
+            try {
+                const [cRes, pRes] = await Promise.all([
+                    fetch('/api/v1/connect/connections'),
+                    fetch('/api/v1/connect/providers'),
+                ]);
+                if (cRes.ok) this.connections = await cRes.json();
+                if (pRes.ok) this.providerCatalogue = await pRes.json();
+            } catch(e) {
+                this.toast('Failed to load provider data', 'error');
+            }
+        },
+
+        async startOAuth(providerId) {
+            this.connectLoading = providerId;
+            try {
+                const res = await fetch('/api/v1/connect/oauth/start/' + providerId, { method: 'POST' });
+                if (res.ok) {
+                    const data = await res.json();
+                    window.location.href = data.redirect_url;
+                } else {
+                    const err = await res.json().catch(() => ({}));
+                    this.toast(err.detail || 'Failed to start OAuth', 'error');
+                    this.connectLoading = null;
+                }
+            } catch(e) {
+                this.toast(e.message, 'error');
+                this.connectLoading = null;
+            }
+        },
+
+        async reconnectProvider(conn) {
+            this.connectLoading = conn.provider_type;
+            try {
+                const res = await fetch('/api/v1/connect/connections/' + conn.id + '/reconnect', { method: 'POST' });
+                if (res.ok) {
+                    const data = await res.json();
+                    window.location.href = data.redirect_url;
+                } else {
+                    const err = await res.json().catch(() => ({}));
+                    this.toast(err.detail || 'Failed to reconnect', 'error');
+                    this.connectLoading = null;
+                }
+            } catch(e) {
+                this.toast(e.message, 'error');
+                this.connectLoading = null;
+            }
+        },
+
+        async checkProviderHealth(connId) {
+            this.connectRefreshing = connId;
+            try {
+                const res = await fetch('/api/v1/connect/connections/' + connId + '/refresh-health', { method: 'POST' });
+                if (res.ok) {
+                    const updated = await res.json();
+                    const idx = this.connections.findIndex(c => c.id === connId);
+                    if (idx >= 0) this.connections[idx] = updated;
+                    this.toast('Health check complete', 'success');
+                }
+            } catch(e) {
+                this.toast(e.message, 'error');
+            } finally {
+                this.connectRefreshing = null;
+            }
+        },
+
+        async disconnectConn(connId) {
+            if (!confirm('Disconnect this provider? Stored files remain intact.')) return;
+            try {
+                const res = await fetch('/api/v1/connect/connections/' + connId, { method: 'DELETE' });
+                if (res.ok) {
+                    this.connections = this.connections.filter(c => c.id !== connId);
+                    this.toast('Provider disconnected', 'info');
+                }
+            } catch(e) {}
+        },
+
+        openS3Wizard(providerSubtype) {
+            const labels = { r2: 'Cloudflare R2', backblaze: 'Backblaze B2', s3: 'Amazon S3' };
+            this.s3Wizard = { provider_subtype: providerSubtype, providerLabel: labels[providerSubtype] || providerSubtype.toUpperCase(),
+                              bucket_name: '', access_key: '', secret_key: '', region: 'us-east-1',
+                              account_id: '', endpoint_url: '', label: '', showAdvanced: false };
+            this.s3TestResult = null;
+            this.showS3Wizard = true;
+        },
+
+        async testS3Connection() {
+            this.s3WizardLoading = true;
+            this.s3WizardMode = 'test';
+            this.s3TestResult = null;
+            try {
+                const res = await fetch('/api/v1/connect/wizard/s3', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ ...this.s3Wizard, test_only: true })
+                });
+                // We call the full endpoint but just use the error/success result
+                if (res.ok) {
+                    this.s3TestResult = { success: true };
+                } else {
+                    const err = await res.json().catch(() => ({}));
+                    this.s3TestResult = { success: false, error: err.detail || 'Unknown error' };
+                }
+            } catch(e) {
+                this.s3TestResult = { success: false, error: e.message };
+            } finally {
+                this.s3WizardLoading = false;
+            }
+        },
+
+        async saveS3Connection() {
+            this.s3WizardLoading = true;
+            this.s3WizardMode = 'save';
+            try {
+                const res = await fetch('/api/v1/connect/wizard/s3', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify(this.s3Wizard)
+                });
+                if (res.ok) {
+                    const conn = await res.json();
+                    this.connections.unshift(conn);
+                    this.showS3Wizard = false;
+                    this.toast(this.s3Wizard.providerLabel + ' connected!', 'success');
+                } else {
+                    const err = await res.json().catch(() => ({}));
+                    this.toast(err.detail || 'Connection failed', 'error');
+                }
+            } catch(e) {
+                this.toast(e.message, 'error');
+            } finally {
+                this.s3WizardLoading = false;
+            }
+        },
+
+        providerIcon(type) {
+            const icons = { google_drive: '📁', dropbox: '📦', onedrive: '☁️', r2: '🔶', backblaze: '🔥', s3: '🪣', local: '💾' };
+            return icons[type] || '⚡';
+        },
+
+        providerName(type) {
+            const names = { google_drive: 'Google Drive', dropbox: 'Dropbox', onedrive: 'OneDrive', r2: 'Cloudflare R2', backblaze: 'Backblaze B2', s3: 'Amazon S3', local: 'Local Storage' };
+            return names[type] || type;
+        },
+
+        formatRelTime(iso) {
+            if (!iso) return '—';
+            const diff = Date.now() - new Date(iso).getTime();
+            const mins = Math.floor(diff / 60000);
+            if (mins < 1) return 'just now';
+            if (mins < 60) return mins + 'm ago';
+            const hrs = Math.floor(mins / 60);
+            if (hrs < 24) return hrs + 'h ago';
+            return Math.floor(hrs / 24) + 'd ago';
+        },
+
         formatBytes(bytes) {
             if (!bytes || bytes === 0) return '0 B';
             const k = 1024, s = ['B','KB','MB','GB','TB'];
@@ -1167,5 +1392,209 @@ function storageApp() {
     };
 }
 </script>
+
+            <!-- VIT CONNECT: STORAGE PROVIDERS -->
+            <div x-show="tab==='connect'" x-cloak>
+                <!-- Success/Error banner from OAuth callback -->
+                <template x-if="connectMsg.type">
+                    <div :class="'connect-status-bar ' + connectMsg.type" style="margin-bottom:16px;">
+                        <span x-text="connectMsg.text"></span>
+                        <button @click="connectMsg={}" style="margin-left:auto; background:none; border:none; cursor:pointer; color:inherit; font-size:16px;">×</button>
+                    </div>
+                </template>
+
+                <div style="display:flex; align-items:center; justify-content:space-between; margin-bottom:20px;">
+                    <div>
+                        <div style="font-size:18px; font-weight:700; margin-bottom:4px;">Storage Providers</div>
+                        <div style="font-size:12.5px; color:var(--text3);">Connect cloud accounts. VIT stores and refreshes tokens automatically — you never manage credentials manually.</div>
+                    </div>
+                    <button class="btn btn-secondary btn-sm" @click="loadConnect()">↺ Refresh</button>
+                </div>
+
+                <!-- Connected accounts ─────────────────── -->
+                <div x-show="connections.length > 0" style="margin-bottom:28px;">
+                    <div class="section-title" style="margin-bottom:12px;">Connected Accounts</div>
+                    <div class="connect-grid">
+                        <template x-for="conn in connections" :key="conn.id">
+                            <div class="provider-card" :class="conn.status">
+                                <div class="provider-header">
+                                    <div class="provider-icon" :class="'provider-icon-' + conn.provider_type">
+                                        <span x-text="providerIcon(conn.provider_type)"></span>
+                                    </div>
+                                    <div class="provider-meta">
+                                        <div class="provider-name" x-text="conn.account_label || providerName(conn.provider_type)"></div>
+                                        <div class="provider-email" x-text="conn.account_email || conn.provider_type"></div>
+                                    </div>
+                                    <div>
+                                        <span class="dot" :class="conn.status==='connected' ? 'dot-green' : conn.status==='expired' ? 'dot-yellow' : 'dot-red'"></span>
+                                    </div>
+                                </div>
+
+                                <!-- Status badge -->
+                                <div class="provider-status-row">
+                                    <span class="badge" :class="conn.status==='connected' ? 'badge-blue' : 'badge-red'"
+                                          x-text="conn.status==='connected' ? 'Connected' : conn.status==='expired' ? 'Needs Reconnection' : conn.status"></span>
+                                    <span x-show="conn.latency_ms" style="font-size:11px; color:var(--text3);" x-text="conn.latency_ms + ' ms'"></span>
+                                    <span x-show="conn.health_score" style="font-size:11px; color:var(--text3);" x-text="'Health ' + conn.health_score + '%'"></span>
+                                </div>
+
+                                <!-- Storage usage bar -->
+                                <template x-if="conn.storage_quota_bytes > 0">
+                                    <div>
+                                        <div style="display:flex; justify-content:space-between; font-size:11px; color:var(--text3); margin-bottom:5px;">
+                                            <span x-text="formatBytes(conn.storage_used_bytes || 0) + ' used'"></span>
+                                            <span x-text="'of ' + formatBytes(conn.storage_quota_bytes)"></span>
+                                        </div>
+                                        <div class="progress-bar" style="height:5px;">
+                                            <div class="progress-fill"
+                                                 :style="'width:' + Math.min(Math.round(((conn.storage_used_bytes||0)/conn.storage_quota_bytes)*100),100) + '%; background:' + usageColor(Math.round(((conn.storage_used_bytes||0)/conn.storage_quota_bytes)*100))">
+                                            </div>
+                                        </div>
+                                    </div>
+                                </template>
+
+                                <!-- Extras for key-auth providers -->
+                                <template x-if="conn.extra_config && conn.extra_config.bucket_name">
+                                    <div style="font-size:11.5px; color:var(--text3);">
+                                        🪣 <span x-text="conn.extra_config.bucket_name"></span>
+                                        <template x-if="conn.extra_config.region">
+                                            <span x-text="' · ' + conn.extra_config.region"></span>
+                                        </template>
+                                    </div>
+                                </template>
+
+                                <!-- Last sync -->
+                                <div x-show="conn.last_sync_at" style="font-size:11px; color:var(--text3);"
+                                     x-text="'Last sync: ' + (conn.last_sync_at ? formatRelTime(conn.last_sync_at) : '—')"></div>
+
+                                <!-- Reconnect banner for expired -->
+                                <template x-if="conn.status==='expired' || conn.status==='error'">
+                                    <div style="background:rgba(251,191,36,0.1); border:1px solid rgba(251,191,36,0.25); border-radius:8px; padding:10px 12px; font-size:12px; color:var(--yellow);">
+                                        <div style="font-weight:600; margin-bottom:4px;">Needs Reconnection</div>
+                                        <div style="color:var(--text2); margin-bottom:8px;">Your authorization expired. Click Reconnect to continue.</div>
+                                        <button class="btn btn-sm" style="background:rgba(251,191,36,0.15); border:1px solid rgba(251,191,36,0.3); color:var(--yellow);" @click="reconnectProvider(conn)">↺ Reconnect</button>
+                                    </div>
+                                </template>
+
+                                <!-- Actions -->
+                                <div class="provider-actions">
+                                    <button class="btn btn-secondary btn-sm" @click="checkProviderHealth(conn.id)" :disabled="connectRefreshing===conn.id">
+                                        <span x-text="connectRefreshing===conn.id ? 'Checking…' : '↺ Health'"></span>
+                                    </button>
+                                    <button class="btn btn-danger btn-sm" @click="disconnectConn(conn.id)">Disconnect</button>
+                                </div>
+                            </div>
+                        </template>
+                    </div>
+                </div>
+
+                <!-- Available providers ─────────────────── -->
+                <div class="section-title" style="margin-bottom:12px;">Add a Provider</div>
+                <div class="connect-grid">
+                    <template x-for="p in providerCatalogue" :key="p.id">
+                        <div class="provider-card">
+                            <div class="provider-header">
+                                <div class="provider-icon" :class="'provider-icon-' + p.id">
+                                    <span x-text="p.icon"></span>
+                                </div>
+                                <div class="provider-meta">
+                                    <div class="provider-name" x-text="p.name"></div>
+                                    <div class="provider-desc" x-text="p.description"></div>
+                                </div>
+                            </div>
+
+                            <!-- Not configured warning -->
+                            <template x-if="!p.configured && p.auth_method==='oauth'">
+                                <div style="font-size:11.5px; color:var(--text3); background:var(--bg3); border-radius:7px; padding:8px 10px;">
+                                    ⚙️ OAuth credentials not yet configured on this server. Set <strong x-text="p.id.toUpperCase().replace('_','')+'_CLIENT_ID'"></strong> and <strong>…_CLIENT_SECRET</strong> to enable.
+                                </div>
+                            </template>
+
+                            <div class="provider-actions">
+                                <!-- OAuth flow -->
+                                <template x-if="p.auth_method==='oauth'">
+                                    <button class="btn btn-primary btn-sm" :disabled="!p.configured || connectLoading===p.id"
+                                            @click="startOAuth(p.id)">
+                                        <span x-text="connectLoading===p.id ? 'Opening…' : 'Connect ' + p.name"></span>
+                                    </button>
+                                </template>
+                                <!-- Key / wizard -->
+                                <template x-if="p.auth_method==='key'">
+                                    <button class="btn btn-primary btn-sm" @click="openS3Wizard(p.id)">
+                                        Configure →
+                                    </button>
+                                </template>
+                            </div>
+                        </div>
+                    </template>
+                </div>
+
+                <!-- S3 Wizard modal ─────────────────────── -->
+                <div class="modal-overlay" x-show="showS3Wizard" @click.self="showS3Wizard=false" x-cloak>
+                    <div class="modal-box">
+                        <div class="modal-title" x-text="s3Wizard.providerLabel + ' Connection Wizard'"></div>
+                        <div class="modal-sub">Enter your bucket details. Advanced options are hidden until you need them.</div>
+
+                        <div class="form-group">
+                            <label class="form-label">Bucket Name *</label>
+                            <input class="form-input" x-model="s3Wizard.bucket_name" placeholder="my-bucket">
+                        </div>
+                        <div class="form-group">
+                            <label class="form-label">Access Key *</label>
+                            <input class="form-input" x-model="s3Wizard.access_key" placeholder="AKIAIOSFODNN7EXAMPLE" autocomplete="off">
+                        </div>
+                        <div class="form-group">
+                            <label class="form-label">Secret Key *</label>
+                            <input class="form-input" type="password" x-model="s3Wizard.secret_key" placeholder="••••••••••••••••••••" autocomplete="new-password">
+                        </div>
+                        <div class="form-group">
+                            <label class="form-label">Region</label>
+                            <input class="form-input" x-model="s3Wizard.region" placeholder="us-east-1">
+                        </div>
+
+                        <!-- Advanced toggle -->
+                        <span class="advanced-toggle" @click="s3Wizard.showAdvanced=!s3Wizard.showAdvanced">
+                            <span x-text="s3Wizard.showAdvanced ? '▲ Hide Advanced' : '▼ Advanced'"></span>
+                        </span>
+
+                        <template x-if="s3Wizard.showAdvanced">
+                            <div style="margin-top:12px;">
+                                <template x-if="s3Wizard.provider_subtype==='r2'">
+                                    <div class="form-group">
+                                        <label class="form-label">Cloudflare Account ID</label>
+                                        <input class="form-input" x-model="s3Wizard.account_id" placeholder="abc123...">
+                                    </div>
+                                </template>
+                                <div class="form-group">
+                                    <label class="form-label">Custom Endpoint URL</label>
+                                    <input class="form-input" x-model="s3Wizard.endpoint_url" placeholder="https://...">
+                                </div>
+                                <div class="form-group">
+                                    <label class="form-label">Label (optional)</label>
+                                    <input class="form-input" x-model="s3Wizard.label" placeholder="Production bucket">
+                                </div>
+                            </div>
+                        </template>
+
+                        <!-- Test result -->
+                        <template x-if="s3TestResult">
+                            <div :class="s3TestResult.success ? 'connect-status-bar success' : 'connect-status-bar error'" style="margin-top:14px;">
+                                <span x-text="s3TestResult.success ? '✓ Connection successful' : '✗ ' + s3TestResult.error"></span>
+                            </div>
+                        </template>
+
+                        <div class="modal-actions">
+                            <button class="btn btn-secondary" @click="showS3Wizard=false">Cancel</button>
+                            <button class="btn btn-secondary" @click="testS3Connection()" :disabled="s3WizardLoading">
+                                <span x-text="s3WizardLoading && s3WizardMode==='test' ? 'Testing…' : 'Test Connection'"></span>
+                            </button>
+                            <button class="btn btn-primary" @click="saveS3Connection()" :disabled="s3WizardLoading || !s3TestResult || !s3TestResult.success">
+                                <span x-text="s3WizardLoading && s3WizardMode==='save' ? 'Connecting…' : 'Connect'"></span>
+                            </button>
+                        </div>
+                    </div>
+                </div>
+            </div>
+
 </body>
 </html>
