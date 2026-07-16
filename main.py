@@ -16,49 +16,64 @@ from tachyon.core.database import init_db, AsyncSessionLocal
 from tachyon.core.worker import TachyonVerificationWorker
 from app.services.cache import _get_redis
 
-VERSION = "2.0.0"
+VERSION = "2.0.1"
 
 # Configure structured logging
 logging.basicConfig(
     level=logging.INFO,
-    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
+    format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
 )
 logger = logging.getLogger("tachyon")
 
-# Custom logging filter for request ID
+
 class RequestIDFilter(logging.Filter):
     def filter(self, record):
-        record.request_id = getattr(record, 'request_id', 'startup')
+        record.request_id = getattr(record, "request_id", "startup")
         return True
+
 
 logger.addFilter(RequestIDFilter())
 
+# ---------------------------------------------------------------------------
+# Singleton registry — shared across the whole process lifetime.
+# Instantiated once during lifespan startup so the /health endpoint never
+# creates a new ProviderRegistry (which would re-bootstrap and re-run
+# expensive credential validation on every request).
+# ---------------------------------------------------------------------------
+_registry = None
+
+
+def get_registry():
+    """Return the process-wide ProviderRegistry singleton."""
+    return _registry
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    logger.info(f"VIT Storage Service v{VERSION} starting up...")
+    global _registry
 
+    logger.info(f"VIT Storage Service v{VERSION} starting up...")
     os.makedirs("frontend/static", exist_ok=True)
 
-    # 1. Startup Schema Creation & Validation
+    # ── 1. Database schema ────────────────────────────────────────────────
     try:
         await init_db()
     except Exception as e:
-        logger.critical(f"Startup Database Migrations failed: {e}")
+        logger.critical(f"Startup database initialization failed: {e}")
 
-    # 2. Database Connectivity Diagnostics
+    # ── 2. Database connectivity ──────────────────────────────────────────
     db_healthy = False
-    r = None
     try:
         async with AsyncSessionLocal() as session:
-            res = await session.execute(text("SELECT 1"))
-            res.scalar()
+            await session.execute(text("SELECT 1"))
             db_healthy = True
             logger.info("Database connectivity check: OK")
     except Exception as e:
         logger.error(f"Database connectivity check: FAILED ({e})")
 
-    # 3. Redis Connectivity Diagnostics
+    # ── 3. Redis connectivity ─────────────────────────────────────────────
     redis_healthy = False
+    r = None
     try:
         r = _get_redis()
         if r:
@@ -66,24 +81,43 @@ async def lifespan(app: FastAPI):
             redis_healthy = True
             logger.info("Redis connectivity check: OK")
         else:
-            logger.info("Redis not configured. Operating with in-memory cache fallback.")
+            logger.info("Redis not configured — operating with in-memory cache fallback.")
     except Exception as e:
-        logger.warning(f"Redis connectivity check: FAILED. Memory fallback active. Error: {e}")
+        logger.warning(f"Redis connectivity check: FAILED — memory fallback active. Error: {e}")
 
-    # 4. Background Shards Integrity Worker
+    # ── 4. Provider registry + startup diagnostics ────────────────────────
+    from tachyon.providers.registry import ProviderRegistry
+
+    _registry = ProviderRegistry()
+    app.state.registry = _registry
+
+    logger.info("=== Storage Provider Startup Diagnostics ===")
+    try:
+        diag = await _registry.startup_diagnostics()
+        logger.info(
+            f"Provider summary: "
+            f"{len(diag['active_providers'])} active, "
+            f"{len(diag['disabled_providers'])} disabled, "
+            f"all_healthy={diag['all_healthy']}"
+        )
+    except Exception as e:
+        logger.warning(f"Provider startup diagnostics failed: {e}")
+    logger.info("=== End Provider Diagnostics ===")
+
+    # ── 5. Background integrity worker ────────────────────────────────────
     worker = TachyonVerificationWorker(interval_seconds=3600)
-    task = asyncio.create_task(worker.start())
+    task   = asyncio.create_task(worker.start())
 
-    app.state.db_healthy = db_healthy
+    app.state.db_healthy    = db_healthy
     app.state.redis_healthy = redis_healthy
-    app.state.worker = worker
+    app.state.worker        = worker
 
     logger.info(f"VIT Storage Service v{VERSION} ready.")
     yield
 
-    # Graceful Shutdown
+    # ── Graceful shutdown ─────────────────────────────────────────────────
     logger.info("Service shutting down...")
-    worker.stop()
+    await worker.stop()
     task.cancel()
     try:
         await task
@@ -99,16 +133,19 @@ async def lifespan(app: FastAPI):
 
     logger.info("Service shutdown completed cleanly.")
 
+
 app = FastAPI(
     title="VIT Storage Service",
-    description="Decentralised swarm storage coordination — EEC erasure coding, multi-cloud burst transfer",
+    description=(
+        "Decentralised swarm storage coordination — "
+        "EEC erasure coding, multi-cloud burst transfer"
+    ),
     version=VERSION,
     lifespan=lifespan,
 )
 
 # ── Middleware ────────────────────────────────────────────────────────────────
 app.add_middleware(GZipMiddleware, minimum_size=1024)
-
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
@@ -116,17 +153,20 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
+
 @app.middleware("http")
 async def add_request_id(request: Request, call_next):
     request_id = request.headers.get("X-Request-ID", str(uuid.uuid4()))
     request.state.request_id = request_id
     response = await call_next(request)
-    response.headers["X-Request-ID"] = request_id
-    response.headers["X-Tachyon-Version"] = VERSION
+    response.headers["X-Request-ID"]       = request_id
+    response.headers["X-Tachyon-Version"]  = VERSION
     return response
+
 
 # ── Exception handlers ────────────────────────────────────────────────────────
 from app.core.errors import AppError, error_response
+
 
 @app.exception_handler(AppError)
 async def app_error_handler(request: Request, exc: AppError):
@@ -135,21 +175,22 @@ async def app_error_handler(request: Request, exc: AppError):
         status_code=exc.status_code,
         code=exc.code,
         message=exc.message,
-        details=exc.details
+        details=exc.details,
     )
+
 
 # ── Routers ──────────────────────────────────────────────────────────────────
 from tachyon.api.router import router as api_router
 from tachyon.api.extended_router import extended_router
 
-app.include_router(api_router, prefix="/api/v1", tags=["Storage Core"])
+app.include_router(api_router,      prefix="/api/v1", tags=["Storage Core"])
 app.include_router(extended_router, prefix="/api/v1", tags=["Extended API"])
 
 # ── Static files ──────────────────────────────────────────────────────────────
 os.makedirs("frontend/static", exist_ok=True)
 app.mount("/static", StaticFiles(directory="frontend/static"), name="static")
 
-# ── Helper: serve the SPA index.html ─────────────────────────────────────────
+
 def _serve_spa() -> HTMLResponse:
     index_path = os.path.join("frontend", "static", "index.html")
     if os.path.exists(index_path):
@@ -158,49 +199,48 @@ def _serve_spa() -> HTMLResponse:
         return HTMLResponse(content=content)
     return HTMLResponse("<h1>VIT Storage — UI not found</h1>", status_code=503)
 
+
 # ── SPA routes ────────────────────────────────────────────────────────────────
-@app.get("/", include_in_schema=False)
-async def root():
-    return _serve_spa()
+@app.get("/",               include_in_schema=False)
+async def root():            return _serve_spa()
 
-@app.get("/dashboard", response_class=HTMLResponse, include_in_schema=False)
-async def dashboard():
-    return _serve_spa()
+@app.get("/dashboard",      response_class=HTMLResponse, include_in_schema=False)
+async def dashboard():       return _serve_spa()
 
-@app.get("/my-files", response_class=HTMLResponse, include_in_schema=False)
-async def my_files():
-    return _serve_spa()
+@app.get("/my-files",       response_class=HTMLResponse, include_in_schema=False)
+async def my_files():        return _serve_spa()
 
-@app.get("/shared-links", response_class=HTMLResponse, include_in_schema=False)
-async def shared_links_page():
-    return _serve_spa()
+@app.get("/shared-links",   response_class=HTMLResponse, include_in_schema=False)
+async def shared_links_page(): return _serve_spa()
 
 @app.get("/api-playground", response_class=HTMLResponse, include_in_schema=False)
-async def api_playground_page():
-    return _serve_spa()
+async def api_playground_page(): return _serve_spa()
 
 @app.get("/administration", response_class=HTMLResponse, include_in_schema=False)
-async def administration_page():
-    return _serve_spa()
+async def administration_page(): return _serve_spa()
 
-@app.get("/wallet", response_class=HTMLResponse, include_in_schema=False)
-async def wallet_page():
-    return _serve_spa()
+@app.get("/wallet",         response_class=HTMLResponse, include_in_schema=False)
+async def wallet_page():     return _serve_spa()
 
-@app.get("/documentation", response_class=HTMLResponse, include_in_schema=False)
-async def documentation_page():
-    return _serve_spa()
+@app.get("/documentation",  response_class=HTMLResponse, include_in_schema=False)
+async def documentation_page(): return _serve_spa()
+
 
 # ── Core endpoints ────────────────────────────────────────────────────────────
 @app.get("/ping", summary="Service Liveness Ping")
 async def ping():
-    return {"ping": "pong", "status": "ok", "version": VERSION, "timestamp": datetime.utcnow().isoformat()}
+    return {
+        "ping":      "pong",
+        "status":    "ok",
+        "version":   VERSION,
+        "timestamp": datetime.utcnow().isoformat(),
+    }
+
 
 @app.get("/health", summary="Active Subsystem Diagnostics Check")
-async def health():
-    db_ok = getattr(app.state, "db_healthy", False)
-    redis_ok = getattr(app.state, "redis_healthy", False)
-
+async def health(request: Request):
+    # ── Database ──────────────────────────────────────────────────────────
+    db_ok = False
     try:
         async with AsyncSessionLocal() as session:
             await session.execute(text("SELECT 1"))
@@ -208,51 +248,54 @@ async def health():
     except Exception:
         db_ok = False
 
-    try:
-        from tachyon.providers.registry import ProviderRegistry
-        registry = ProviderRegistry()
-        provider_stats = await registry.health_check()
-    except Exception as e:
-        provider_stats = {"error": f"Failed to check providers health: {e}"}
+    # ── Redis ─────────────────────────────────────────────────────────────
+    redis_ok = getattr(app.state, "redis_healthy", False)
+
+    # ── Provider health — reuse the singleton registry ────────────────────
+    registry = getattr(request.app.state, "registry", None)
+    if registry is None:
+        # Defensive fallback (should not happen in normal operation)
+        provider_stats = {"error": "Registry not initialized"}
+    else:
+        try:
+            provider_stats = await registry.health_check()
+        except Exception as e:
+            provider_stats = {"error": f"Provider health check failed: {e}"}
 
     status_str = "quantum_stable" if db_ok else "degraded"
     return {
-        "status": status_str,
-        "version": VERSION,
-        "plane": "coordination",
-        "timestamp": datetime.utcnow().isoformat(),
-        "database": "connected" if db_ok else "disconnected",
-        "redis": "connected" if redis_ok else "not_configured_or_disconnected",
-        "subsystems": provider_stats
+        "status":     status_str,
+        "version":    VERSION,
+        "plane":      "coordination",
+        "timestamp":  datetime.utcnow().isoformat(),
+        "database":   "connected"                          if db_ok    else "disconnected",
+        "redis":      "connected"                          if redis_ok else "not_configured_or_disconnected",
+        "subsystems": provider_stats,
     }
 
+
 @app.get("/metrics", summary="Prometheus Metrics Endpoint")
-async def metrics(db_param: str = None):
-    db_ok = 1 if getattr(app.state, "db_healthy", False) else 0
+async def metrics(request: Request):
+    db_ok       = 1
     total_files = 0
     total_bytes = 0
 
     try:
         async with AsyncSessionLocal() as session:
             await session.execute(text("SELECT 1"))
-            db_ok = 1
             from sqlalchemy import select, func
             from tachyon.core.models import TachyonManifest
-            count_res = await session.execute(select(func.count(TachyonManifest.file_id)))
+            count_res   = await session.execute(select(func.count(TachyonManifest.file_id)))
             total_files = count_res.scalar() or 0
-            bytes_res = await session.execute(select(func.sum(TachyonManifest.size_bytes)))
+            bytes_res   = await session.execute(select(func.sum(TachyonManifest.size_bytes)))
             total_bytes = bytes_res.scalar() or 0
     except Exception:
         db_ok = 0
 
     redis_ok = 1 if getattr(app.state, "redis_healthy", False) else 0
 
-    try:
-        from tachyon.core.orchestrator import TachyonOrchestrator
-        orch = TachyonOrchestrator()
-        active_nodes = orch.pool.available_provider_count()
-    except Exception:
-        active_nodes = 1
+    registry     = getattr(request.app.state, "registry", None)
+    active_nodes = registry.available_provider_count() if registry else 1
 
     metric_output = (
         "# HELP tachyon_up Service status indicator (1 = UP, 0 = DOWN)\n"
@@ -275,6 +318,7 @@ async def metrics(db_param: str = None):
         f"tachyon_active_nodes {active_nodes}\n"
     )
     return Response(content=metric_output, media_type="text/plain")
+
 
 if __name__ == "__main__":
     import uvicorn
