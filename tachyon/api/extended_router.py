@@ -535,9 +535,11 @@ async def debug_providers():
                     pass
                 return {"ok": True, "latency_ms": round((time.monotonic()-t0)*1000, 1)}
             else:
-                return {"ok": False, "error": "upload() returned False", "latency_ms": round((time.monotonic()-t0)*1000, 1)}
+                last_err = getattr(provider, "_last_upload_error", None)
+                return {"ok": False, "error": f"upload() returned False. Cause: {last_err}", "latency_ms": round((time.monotonic()-t0)*1000, 1)}
         except asyncio.TimeoutError:
-            return {"ok": False, "error": "Timed out after 12s"}
+            last_err = getattr(provider, "_last_upload_error", None)
+            return {"ok": False, "error": f"Timed out after 12s. Last recorded error: {last_err}"}
         except Exception as exc:
             return {"ok": False, "error": str(exc)}
 

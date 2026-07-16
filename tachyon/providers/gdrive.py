@@ -31,7 +31,8 @@ class GoogleDriveProvider(CloudProvider):
         self._credentials_dict = credentials
         self._folder_id = folder_id or os.getenv(f"GDRIVE_{account_id.upper()}_FOLDER_ID")
         self._service = None
-        self._name_to_id = {} # Memoization lookup cache for files
+        self._name_to_id = {}         # Memoization lookup cache for files
+        self._last_upload_error = None  # Last upload error for diagnostics
 
     def _get_service(self):
         if self._service:
@@ -116,6 +117,7 @@ class GoogleDriveProvider(CloudProvider):
                 "shards will be written to Drive root (no parent folder).",
                 self.account_id, exc,
             )
+            self._last_upload_error = f"_get_folder_id failed: {repr(exc)}"
             self._folder_id = _GDRIVE_ROOT_SENTINEL
 
         return None if self._folder_id == _GDRIVE_ROOT_SENTINEL else self._folder_id
@@ -187,6 +189,7 @@ class GoogleDriveProvider(CloudProvider):
             self._name_to_id[name] = file_res.get("id")
             return True
         except Exception as e:
+            self._last_upload_error = repr(e)
             logger.error(f"Google Drive upload failed [{self.account_id}]: {e}")
             return False
 
