@@ -36,6 +36,9 @@ class Settings(BaseSettings):
     S3_BUCKET_NAME: Optional[str] = None
     S3_REGION: str = "us-east-1"
 
+    # VIT Chain integration (Chain ID 7764)
+    VIT_SWARM_COORDINATOR_ADDRESS: Optional[str] = None
+
     # Platform Variables
     TACHYON_MAX_FILE_SIZE_MB: int = 100
     TACHYON_DATA_SHARDS: int = 6
