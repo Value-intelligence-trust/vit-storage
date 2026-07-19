@@ -28,6 +28,7 @@ from sqlalchemy import select, func
 from app.db.database import get_db
 from tachyon.core.models import TachyonManifest, SharedLink
 from tachyon.core.orchestrator import TachyonOrchestrator
+from tachyon.core.config import settings
 from tachyon.api.models import (
     NodeInfo, StorageStats, QuotaInfo, AdminOverview, WalletInfo,
     SharedLinkCreate, SharedLinkResponse,
@@ -497,7 +498,7 @@ async def get_wallet():
         logger.debug(f"Wallet config read failed (expected on fresh deploy): {e}")
 
     return WalletInfo(
-        address="vit1_swarm_coordinator_main",
+        address=settings.VIT_SWARM_COORDINATOR_ADDRESS or "",
         vit_balance=0.0,
         storage_credits=100.0,
         plan="Free Plan",
