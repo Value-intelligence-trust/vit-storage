@@ -44,13 +44,20 @@ def _get_redis():
         return None
     try:
         import redis.asyncio as aioredis
-        _redis_client = aioredis.from_url(
-            redis_url,
-            decode_responses=True,
-            socket_timeout=3.0,
-            socket_connect_timeout=3.0,
-        )
-        logger.info("Cache: Redis backend enabled")
+        kwargs: dict = {
+            "decode_responses": True,
+            "socket_timeout": 3.0,
+            "socket_connect_timeout": 3.0,
+        }
+        # For rediss:// (TLS) URLs: disable cert verification so Render-managed
+        # Redis Cloud instances (signed by a private CA) connect successfully.
+        # Without ssl_cert_reqs="none" the TLS handshake raises
+        # ssl.SSLCertVerificationError and the connection silently falls back
+        # to the in-memory cache.
+        if redis_url.startswith("rediss://"):
+            kwargs["ssl_cert_reqs"] = "none"
+        _redis_client = aioredis.from_url(redis_url, **kwargs)
+        logger.info("Cache: Redis backend enabled (%s)", redis_url.split("@")[-1] if "@" in redis_url else redis_url)
     except Exception as exc:
         logger.warning("Cache: Redis unavailable (%s) — using memory fallback", exc)
         _redis_client = None
