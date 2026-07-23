@@ -258,16 +258,20 @@ async def health(request: Request):
     # ── Redis ─────────────────────────────────────────────────────────────
     redis_ok = getattr(app.state, "redis_healthy", False)
 
-    # ── Provider health — reuse the singleton registry ────────────────────
+    # ── Provider summary — count only, no external API calls ─────────────
+    # Calling cloud provider SDKs (Dropbox, OneDrive) in a health-check
+    # endpoint runs synchronous C-extension code in threads and can crash
+    # the process with SIGSEGV on bad/expired tokens.  Detailed provider
+    # health is available at /api/v1/providers/health (authenticated).
     registry = getattr(request.app.state, "registry", None)
     if registry is None:
-        # Defensive fallback (should not happen in normal operation)
-        provider_stats = {"error": "Registry not initialized"}
+        provider_summary = {"active": 0, "disabled": 0}
     else:
-        try:
-            provider_stats = await registry.health_check()
-        except Exception as e:
-            provider_stats = {"error": f"Provider health check failed: {e}"}
+        provider_summary = {
+            "active":   len(registry.providers),
+            "disabled": len(registry.disabled_providers),
+            "available": registry.available_provider_count(),
+        }
 
     status_str = "quantum_stable" if db_ok else "degraded"
     return {
@@ -277,7 +281,7 @@ async def health(request: Request):
         "timestamp":  datetime.utcnow().isoformat(),
         "database":   "connected"                          if db_ok    else "disconnected",
         "redis":      "connected"                          if redis_ok else "not_configured_or_disconnected",
-        "subsystems": provider_stats,
+        "providers":  provider_summary,
     }
 
 
